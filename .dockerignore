@@ -1,0 +1,10 @@
+.git
+.env*
+
+.dagger/
+dagger*
+
+grafana/
+scripts/
+
+*.md
