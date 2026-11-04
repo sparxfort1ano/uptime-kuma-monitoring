@@ -1,0 +1,2 @@
+FROM prom/prometheus:v3.12.0 AS prometheus
+COPY prometheus.yml /etc/prometheus/prometheus.yml

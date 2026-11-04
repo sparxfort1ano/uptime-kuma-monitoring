@@ -1,6 +1,6 @@
 services:
   uptime-kuma:
-    image: louislam/uptime-kuma:2
+    image: louislam/uptime-kuma:2.5.7
     container_name: uptime-kuma
     restart: unless-stopped
     ports:
@@ -55,6 +55,25 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  mariadb-exporter:
+    image: prom/mysqld-exporter:v0.14.0
+    container_name: mariadb-exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=${EXPORTER_USER}:${EXPORTER_PASSWORD}@(mariadb:3306)/
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   mariadb-data:
   kuma-data:
+
+networks:
+  default:
+    name: monitoring_net

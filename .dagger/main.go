@@ -17,14 +17,22 @@ package main
 import (
 	"context"
 	"dagger/monitoring/internal/dagger"
+	"time"
 )
 
 type Monitoring struct{}
 
-// DeployApp composes up MariaDB and Uptime Kuma linking them via docker compose.
-func (m *Monitoring) DeployApp(ctx context.Context, src *dagger.Directory, dockerSock *dagger.Socket) (string, error) {
+// DeployApp composes up MariaDB, Uptime Kuma and mariadb-exporter linking them via docker compose.
+// +cache="never"
+func (m *Monitoring) DeployApp(
+	ctx context.Context,
+	dockerSock *dagger.Socket,
+	// +defaultPath="/"
+	src *dagger.Directory,
+) (string, error) {
 	return dag.Container().
 		From("docker:cli").
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
 		WithUnixSocket("/var/run/docker.sock", dockerSock).
 		WithMountedDirectory("/src", src).
 		WithWorkdir("/src").
@@ -32,7 +40,56 @@ func (m *Monitoring) DeployApp(ctx context.Context, src *dagger.Directory, docke
 			"docker", "compose",
 			"-f", "docker-compose.app.yml",
 			"--env-file", ".env.app",
-			"up", "-d",
+			"up", "-d", "--wait",
+		}).
+		WithExec([]string{"sh", "/src/scripts/init-exporter.sh"}).
+		Stdout(ctx)
+}
+
+// DeployMonitoring composes up Prometheus, Grafana, cAdvisor and node-exporter linking them via docker compose.
+// +cache="never"
+func (m *Monitoring) DeployMonitoring(
+	ctx context.Context,
+	dockerSock *dagger.Socket,
+	// +defaultPath="/"
+	src *dagger.Directory,
+) (string, error) {
+	return dag.Container().
+		From("docker:cli").
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
+		WithUnixSocket("/var/run/docker.sock", dockerSock).
+		WithMountedDirectory("/src", src).
+		WithWorkdir("/src").
+		WithExec([]string{
+			"docker", "compose",
+			"-f", "docker-compose.monitoring.yml",
+			"--env-file", ".env.monitoring",
+			"up", "-d", "--build", "--wait",
+		}).
+		Stdout(ctx)
+}
+
+// ConfigureGrafana configures Data Sources and Dashboards via Grafana API.
+// +cache="never"
+func (m *Monitoring) ConfigureGrafana(
+	ctx context.Context,
+	dockerSock *dagger.Socket,
+	// +defaultPath="/"
+	src *dagger.Directory,
+) (string, error) {
+	return dag.Container().
+		From("docker:cli").
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
+		WithUnixSocket("/var/run/docker.sock", dockerSock).
+		WithMountedDirectory("/src", src).
+		WithWorkdir("/src").
+		WithExec([]string{
+			"sh", "-c",
+			`set -a && . ./.env.monitoring && set +a && \
+			tar -cf - grafana scripts | docker run -i --rm --network monitoring_net \
+			-e GRAFANA_USER="$GRAFANA_USER" \
+			-e GRAFANA_PASSWORD="$GRAFANA_PASSWORD" \
+			alpine:3.20 sh -c "apk add --no-cache curl jq >/dev/null && tar -xf - -C / && sh /scripts/configure-grafana.sh"`,
 		}).
 		Stdout(ctx)
 }
