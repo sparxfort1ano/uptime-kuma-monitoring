@@ -17,6 +17,8 @@ package main
 import (
 	"context"
 	"dagger/monitoring/internal/dagger"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -92,4 +94,51 @@ func (m *Monitoring) ConfigureGrafana(
 			alpine:3.20 sh -c "apk add --no-cache curl jq >/dev/null && tar -xf - -C / && sh /scripts/configure-grafana.sh"`,
 		}).
 		Stdout(ctx)
+}
+
+// DeployAll deploys the entire infrastructure and validates the status of all systems.
+// +cache="never"
+func (m *Monitoring) DeployAll(
+	ctx context.Context,
+	dockerSock *dagger.Socket,
+	// +defaultPath="/"
+	src *dagger.Directory,
+) (string, error) {
+	var log strings.Builder
+
+	appOut, err := m.DeployApp(ctx, dockerSock, src)
+	if err != nil {
+		return "", fmt.Errorf("deploy-app failed: %w", err)
+	}
+	log.WriteString("=== 1. App Layer Deployed ===\n" + appOut + "\n")
+
+	monOut, err := m.DeployMonitoring(ctx, dockerSock, src)
+	if err != nil {
+		return "", fmt.Errorf("deploy-monitoring failed: %w", err)
+	}
+	log.WriteString("=== 2. Monitoring Layer Deployed ===\n" + monOut + "\n")
+
+	grafOut, err := m.ConfigureGrafana(ctx, dockerSock, src)
+	if err != nil {
+		return "", fmt.Errorf("configure-grafana failed: %w", err)
+	}
+	log.WriteString("=== 3. Grafana Configured ===\n" + grafOut + "\n")
+
+	valOut, err := dag.Container().
+		From("docker:cli").
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
+		WithUnixSocket("/var/run/docker.sock", dockerSock).
+		WithExec([]string{
+			"sh", "-c",
+			`docker ps --format "table {{.Names}}\t{{.Status}}" && \
+			docker run --rm --network monitoring_net curlimages/curl:8.10.1 -fsS http://prometheus:9090/-/healthy && \
+			docker run --rm --network monitoring_net curlimages/curl:8.10.1 -fsS http://grafana:3000/api/health`,
+		}).
+		Stdout(ctx)
+	if err != nil {
+		return "", fmt.Errorf("validation failed: %w", err)
+	}
+	log.WriteString("\n=== 4. System Validation Passed ===\n" + valOut + "\n")
+
+	return log.String(), nil
 }
